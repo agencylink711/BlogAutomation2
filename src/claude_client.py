@@ -558,39 +558,30 @@ class ClaudeClient:
         try:
             console.print("[yellow]Waiting for response generation to complete...[/yellow]")
             
-            # Minimum wait time (2.5 minutes) before checking for completion
-            MIN_WAIT_TIME = 150  # seconds
-            # Time to wait after last content change
-            STABLE_CONTENT_TIME = 20  # seconds
-            
-            # Track how long we've been waiting
             start_time = time.time()
             last_content = ""
-            last_content_change = time.time()
-            last_check_time = time.time()
+            last_change_time = time.time()
+            last_spinner_update = time.time()
+            completion_check_count = 0
+            max_completion_checks = 3
             
             # Spinner animation
             spinner_chars = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
             spinner_idx = 0
             
             while time.time() - start_time < max_wait_time:
+                current_time = time.time()
+                elapsed = current_time - start_time
+                
+                # Update spinner animation
+                if current_time - last_spinner_update >= 0.3:
+                    spinner = spinner_chars[spinner_idx % len(spinner_chars)]
+                    console.print(f"\r{spinner} Waiting for Claude to generate content... ({int(elapsed)}s elapsed)", end="")
+                    spinner_idx += 1
+                    last_spinner_update = current_time
+                
+                # Get current content
                 try:
-                    current_time = time.time()
-                    elapsed = current_time - start_time
-                    
-                    # Update spinner animation (every 0.3 seconds)
-                    if current_time - last_check_time >= 0.3:
-                        spinner = spinner_chars[spinner_idx % len(spinner_chars)]
-                        console.print(f"\r{spinner} Waiting for Claude to generate content... ({int(elapsed)}s elapsed)", end="")
-                        spinner_idx += 1
-                        last_check_time = current_time
-                    
-                    # Only check content every 5 seconds to reduce load
-                    if current_time - last_content_change < 5:
-                        await asyncio.sleep(0.2)
-                        continue
-                    
-                    # Get current response content using JavaScript
                     current_content = await self.page.evaluate('''
                         () => {
                             const elements = document.querySelectorAll('.prose, .message-content, .claude-response');
@@ -603,106 +594,127 @@ class ClaudeClient:
                         }
                     ''')
                     
+                    # Check if content has changed
                     if current_content != last_content:
-                        # Content has changed
                         last_content = current_content
-                        last_content_change = current_time
-                    elif current_content and len(current_content.strip()) > 0:
-                        # Content exists and hasn't changed
-                        time_since_change = current_time - last_content_change
-                        time_since_start = current_time - start_time
-                        
-                        # Only consider completion if:
-                        # 1. We've waited the minimum time
-                        # 2. Content hasn't changed for STABLE_CONTENT_TIME seconds
-                        if time_since_start >= MIN_WAIT_TIME and time_since_change >= STABLE_CONTENT_TIME:
-                            # Look for download button
+                        last_change_time = current_time
+                        completion_check_count = 0  # Reset completion check count when content changes
+                    else:
+                        # Check for completion indicators if content hasn't changed for 15 seconds
+                        # and we've waited at least 2 minutes (typical minimum generation time)
+                        if elapsed >= 120 and (current_time - last_change_time) >= 15:
                             try:
-                                # Use the exact XPath for the download button
-                                download_button = await self.page.query_selector(
-                                    'xpath=/html/body/div[2]/div[2]/div/div[3]/div/div[2]/div[1]/div[1]/div[2]/div/button[2]'
-                                )
+                                # Look for signs that generation has stopped
+                                still_generating = await self.page.evaluate('''
+                                    () => {
+                                        // Check for loading indicators
+                                        const loadingElements = document.querySelectorAll(
+                                            '.loading, .generating, .typing-indicator, [role="progressbar"]'
+                                        );
+                                        for (const el of loadingElements) {
+                                            if (el.offsetParent !== null) return true;
+                                        }
+                                        
+                                        // Check for generation text
+                                        const statusTexts = ['generating', 'thinking', 'writing'];
+                                        const pageText = document.body.innerText.toLowerCase();
+                                        return statusTexts.some(text => pageText.includes(text));
+                                    }
+                                ''')
                                 
-                                if download_button and await download_button.is_visible():
-                                    console.print("\n[green]Response generation completed![/green]")
-                                    console.print(f"[blue]Total generation time: {int(elapsed)} seconds[/blue]")
-                                    return True
+                                if not still_generating:
+                                    # Check if download button is visible
+                                    download_button = await self.page.query_selector(
+                                        'xpath=/html/body/div[2]/div[2]/div/div[3]/div/div[2]/div[1]/div[1]/div[2]/div/button[2]'
+                                    )
                                     
+                                    if download_button and await download_button.is_visible():
+                                        console.print("\n[green]Response generation completed![/green]")
+                                        console.print(f"[blue]Total generation time: {int(elapsed)} seconds[/blue]")
+                                        return True
+                                    
+                                    # If we can't find the download button but generation seems complete,
+                                    # increment the check count
+                                    completion_check_count += 1
+                                    
+                                    # If we've checked multiple times and still no download button,
+                                    # assume generation is complete
+                                    if completion_check_count >= max_completion_checks:
+                                        console.print("\n[yellow]Generation appears complete but download button not found.[/yellow]")
+                                        console.print(f"[blue]Total generation time: {int(elapsed)} seconds[/blue]")
+                                        return True
+                            
                             except Exception as e:
-                                # Button check failed, but don't exit - wait longer
-                                console.print(f"\n[yellow]Download button not ready: {str(e)}[/yellow]")
-                                # Reset last content change time to force more waiting
-                                last_content_change = current_time
-                    
-                    await asyncio.sleep(0.2)
+                                console.print(f"\n[yellow]Error checking completion: {str(e)}[/yellow]")
                     
                 except Exception as e:
-                    console.print(f"\n[yellow]Error checking completion: {str(e)}[/yellow]")
-                    # Small delay before retrying
-                    await asyncio.sleep(2)
+                    console.print(f"\n[yellow]Error getting content: {str(e)}[/yellow]")
+                
+                await asyncio.sleep(0.2)  # Small delay to prevent excessive CPU usage
             
+            # If we get here, we've timed out
             console.print("\n[bold red]Timed out waiting for response[/bold red]")
             return False
             
         except Exception as e:
             console.print(f"\n[bold red]Error in wait_for_response_completion: {str(e)}[/bold red]")
             return False
-            
+    
     async def download_content_as_markdown(self, output_path: Path):
-        """
-        Download content from Claude as Markdown using the download button.
-        
-        Args:
-            output_path (Path): Path where the downloaded markdown should be saved
-            
-        Returns:
-            bool: True if content was downloaded successfully, False otherwise
-        """
+        """Download content from Claude as Markdown."""
         try:
             console.print("[yellow]Attempting to download content as markdown...[/yellow]")
             
-            # Try to locate the download button using the XPath
-            download_button_xpath = '/html/body/div[2]/div[2]/div/div[3]/div/div[2]/div[1]/div[1]/div[2]/div/button[2]'
-            
-            # Wait for download button to be visible
+            # Try direct "Copy" button first since it's more reliable
             try:
-                console.print("[yellow]Waiting for download button to be visible...[/yellow]")
-                download_button = await self.page.wait_for_selector(
-                    f"xpath={download_button_xpath}",
-                    state="visible",
-                    timeout=30000
-                )
-                
-                if not download_button:
-                    console.print("[red]Download button not found[/red]")
-                    return False
-                
-                # Make sure we can interact with the button
-                await asyncio.sleep(2)
-                
-                # Click the button
-                console.print("[green]Download button found! Clicking...[/green]")
-                
-                # Set up a download listener before clicking
-                async with self.page.expect_download(timeout=30000) as download_info:
-                    await download_button.click()
+                console.print("[yellow]Trying to copy content...[/yellow]")
+                copy_button = await self.page.query_selector('button:has-text("Copy")')
+                if copy_button:
+                    await copy_button.click()
+                    await asyncio.sleep(1)
                     
-                    # Wait for the download to start
-                    download = await download_info.value
+                    # Get content from clipboard via JavaScript
+                    content = await self.page.evaluate('''
+                        async () => {
+                            try {
+                                return await navigator.clipboard.readText();
+                            } catch (e) {
+                                return null;
+                            }
+                        }
+                    ''')
                     
-                    # Save to the specified path
-                    await download.save_as(output_path)
-                    console.print(f"[green]Content downloaded and saved to: {output_path}[/green]")
+                    if content:
+                        # Save content to file
+                        output_path.parent.mkdir(parents=True, exist_ok=True)
+                        with open(output_path, 'w', encoding='utf-8') as f:
+                            f.write(content)
+                        console.print(f"[green]Content saved using clipboard method to: {output_path}[/green]")
+                        return True
+                
+                console.print("[yellow]Copy button method failed, trying alternative method...[/yellow]")
+            except Exception as copy_error:
+                console.print(f"[yellow]Copy method failed: {str(copy_error)}[/yellow]")
+            
+            # If copy failed, try direct extraction
+            try:
+                # Extract content directly from the page
+                content = await self.extract_response()
+                if content:
+                    # Save the extracted content
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    with open(output_path, 'w', encoding='utf-8') as f:
+                        f.write(content)
+                    console.print(f"[green]Content saved using direct extraction to: {output_path}[/green]")
                     return True
-                
+                    
             except Exception as e:
-                console.print(f"[red]Error during download: {str(e)}[/red]")
-                await self.take_screenshot("download_error")
+                console.print(f"[red]Content extraction failed: {str(e)}[/red]")
                 return False
                 
         except Exception as e:
-            console.print(f"[bold red]Error downloading content: {str(e)}[/bold red]")
-            await self.take_screenshot("download_error")
+            console.print(f"[bold red]Error saving content: {str(e)}[/bold red]")
+            await self.take_screenshot("save_content_error")
             return False
     
     async def refresh_page(self) -> bool:
