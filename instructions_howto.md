@@ -1,22 +1,39 @@
-Clear instructions on how the process of the blog text automation will be carried out.
+# Blog Text Automation Process
 
-1.  Go to the keyword.txt file Grab a keyword.
+Clear instructions on how the blog text automation process works.
 
-2.  Open playwright
+## Initial Setup
 
-go to claude.ai
-# Note: Login credentials should be managed securely, not stored in this file
-# Use environment variables or a secure credential manager
+1. Ensure you have keywords in the `content/keywords/keywords.txt` file (one per line)
+2. Make sure you're logged into your Google account in Chrome
 
-if login successful,
+## Running the Automation
 
-navigate to:
-https://claude.ai/project/434990a3-f303-4f35-85cd-490c991139d4
+1. Activate your virtual environment:
 
-3.  Copy and Paste the prompt below to generate the Text needed.
-    note that, to generate the correct Text, you have to add the prompt and replace “replace_with_keyword” with the selected keyword from the keyword.txt file
+   ```
+   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   ```
 
-THEMA/KEYWORD: {Hauptstichwort = “replace_with_keyword”}
+2. Run the script:
+
+   ```
+   python src/main.py
+   ```
+
+3. When Playwright opens Chrome:
+
+   - First time: Complete Google login if needed
+   - The script will navigate to Claude.ai automatically
+   - It will use the project URL: https://claude.ai/project/434990a3-f303-4f35-85cd-490c991139d4
+
+4. For each keyword, the script will:
+   - Take a keyword from keywords.txt
+   - Navigate to Claude
+   - Submit the following prompt template, replacing {Hauptstichwort} with the keyword:
+
+```
+THEMA/KEYWORD: {Hauptstichwort}
 
 SCHREIBAUFTRAG: IMMOBILIEN-FACHTEXT
 
@@ -50,25 +67,41 @@ TABELLENVORSCHLAG: Eine Vergleichstabelle zu verschiedenen Aspekten von {Hauptst
 DIAGRAMMVORSCHLAG: Ein Faktendiagramm zur Preisentwicklung oder andere Entwicklungen von {Hauptstichwort} in verschiedenen Stadtlagen
 
 KEYWORD-PLATZIERUNG:
-
-    •	Hauptstichwort “” 12-20 mal natürlich im Text verteilen
-    •	Verwandte Stichwörter einfließen lassen
-    •	Hauptstichwort-Variationen durch Flexion und Komposita nutzen
+• Hauptstichwort "" 12-20 mal natürlich im Text verteilen
+• Verwandte Stichwörter einfließen lassen
+• Hauptstichwort-Variationen durch Flexion und Komposita nutzen
 
 WEITERE ANTI-KI-MERKMALE:
+• Berufsspezifischen Fachjargon mit umgangssprachlichen Ausdrücken mischen
+• Deutsche Sprichwörter oder regionale Redewendungen verwenden
+• Persönliche Meinungen äußern
 
-    •	Berufsspezifischen Fachjargon mit umgangssprachlichen Ausdrücken mischen
-    •	Deutsche Sprichwörter oder regionale Redewendungen verwenden
-    •	Persönliche Meinungen äußern
+AUTOR-PERSONA: Ein erfahrener Immobilienmakler aus Deutschland mit mehreren Jahren Berufserfahrung, der für immobilienindernaehe.com schreibt. Hat eine Vorliebe für ältere Häuser und kennt sich besonders gut mit urbanem Wohnraum aus. Auch Neubau wird gerne gemocht.
+```
 
-AUTOR-PERSONA: Ein erfahrener Immobilienmakler aus Deutschland mit mehreren Jahren Berufserfahrung, der für immobilienindernaehe.com schreibt. Hat eine Vorliebe für ältere Häuser und kennt
+5. The script will:
+   - Wait for Claude to finish writing
+   - Save the generated text as a markdown file in `content/completed/{keyword}/`
+   - Mark the keyword as processed in processed_keywords.txt
+   - Move to the next keyword
 
-sich besonders gut mit urbanem Wohnraum aus. Auch Neubau wird gerne gemocht.
+## Output Files
 
-4.  press enter to generate the text
+- Each generated blog post will be saved in its own directory under `content/completed/`
+- The filename format is: `{keyword}.md`
+- Keywords are tracked in `processed_keywords.txt` to avoid duplicates
 
-5.  Wait till the text hast been written successfully and completed
+## Troubleshooting
 
-6.  save text as md and pdf in the content/completed/{01_keyword_name}
+If the script encounters issues:
 
-7.  at this point we complete the process
+1. Check the screenshots/ folder for error state images
+2. Ensure your Google login is still valid
+3. Check that Claude.ai is accessible
+4. Delete processed_keywords.txt to reprocess all keywords
+
+## Notes
+
+- The script maintains a persistent browser session to avoid frequent logins
+- Screenshots are saved during the process for debugging
+- Claude.ai may have maintenance windows or downtimes
